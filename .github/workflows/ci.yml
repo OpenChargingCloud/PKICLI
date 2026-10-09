@@ -1,0 +1,268 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  # Manual runs from the Actions tab ("Run workflow").
+  workflow_dispatch:
+
+concurrency:
+  # Pull requests: one run per branch, newest wins. Pushes: one run per commit,
+  # and nothing cancels anything — a commit with no verdict is a hole nobody
+  # comes back to fill. Keying the group on the SHA rather than only turning
+  # cancel-in-progress off is what makes that hold for more than two pushes.
+  # The same arrangement as EVCLI and the other repositories of this stack.
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+
+  # ---------------------------------------------------------------------------
+  # One leg per platform this PKI is used on:
+  #
+  #  * Windows, because that is where it is developed.
+  #  * Debian 13, because that is what the family is deployed on. GitHub has
+  #    no Debian runner image, so this leg is an Ubuntu runner carrying a
+  #    debian:13 container.
+  #
+  # fail-fast is off on purpose: "red on exactly one platform" is the most
+  # valuable thing a two-leg matrix produces, so one leg must not cancel the
+  # other.
+  #
+  # Unlike EVCLI there is no job before this one: nothing here touches
+  # ISO 15118, so there are no schemas to fetch.
+  # ---------------------------------------------------------------------------
+  build-and-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            leg: windows-latest
+          - os: ubuntu-latest
+            container: debian:13
+            leg: debian-13-container
+    runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
+    steps:
+
+      # Before the checkout, not after it. The deepest file below this clone
+      # root sits 154 characters down, and under the classic 260-character
+      # limit a submodule checkout gives up halfway through with "Filename too
+      # long" — the same thing the README warns about for a clone by hand.
+      - name: Allow long paths (Windows)
+        if: runner.os == 'Windows'
+        run: git config --system core.longpaths true
+
+      # Also before the checkout, and for a sharper reason: git itself. The bare
+      # debian:13 image has none, and actions/checkout without git falls back to
+      # downloading a tarball over the REST API — which cannot bring submodules,
+      # so the failure would arrive much later, as a missing Hermod.
+      #
+      # The rest is what .NET and Node need on a bare Debian: curl for the
+      # install scripts and the smoke test, ICU and tzdata for globalization,
+      # OpenSSL for crypto, ca-certificates for NuGet over HTTPS, and xz-utils
+      # because the Node tarball is a .tar.xz that Debian's tar cannot open
+      # without it.
+      - name: Install prerequisites (Debian container)
+        if: runner.os == 'Linux'
+        run: apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git libicu76 libssl3t64 libstdc++6 tzdata xz-utils && git config --global --add safe.directory '*'
+
+      # The libraries are submodules, pinned, and testing them as pinned is the
+      # point: this repository's own question is whether this particular
+      # combination of libraries works together.
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+
+      # The web interface is built by npm and webpack from inside the .NET build
+      # — PKI.csproj runs "npm ci" and "npm run build" and then embeds dist/
+      # as assembly resources — so Node is not optional on either leg. 24.x
+      # rather than what Debian ships: package.json asks for 22 or newer, and
+      # the frontend's tests are run by node itself directly on .ts files, which
+      # needs a Node new enough to strip types without being asked.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24.x'
+
+      # The whole solution rather than only PKICLI: "they still compile
+      # together at these gitlinks" is the one statement this repository is
+      # uniquely able to make.
+      - name: Build
+        run: dotnet build PKICLI.slnx --configuration Release
+
+      # What the .NET build does not cover. webpack type-checks the modules it
+      # can reach from the entry point, which leaves out the test files; and
+      # the frontend's own tests are run by node, so nothing in a dotnet build
+      # would ever execute them. The type checks take in what the pages share
+      # with every kind of node, from libs/WWCP_Node/Frontend/src, as the
+      # PKI uses it; that code's own tests are run by WWCP_Node's CI.
+      #
+      # node_modules is already there — the build put it there — so this costs
+      # seconds. One leg, because TypeScript does not know which platform it is
+      # on, and a second run would only make one red look like two failures.
+      - name: The web interface (type checks and its own tests)
+        if: matrix.leg == 'debian-13-container'
+        working-directory: libs/PKI/PKI/Frontend
+        run: |
+          npm run typecheck
+          npm run typecheck:test
+          npm test
+
+      # The node below the PKI: its log, its configuration file, DNS and
+      # NTS, the certificate store, who may do what, its accounts and its
+      # ports - and the node itself, started where a test needs it listening:
+      # on a free port, and without a question to any name or time server
+      # leaving this machine. libs/WWCP_Node has a workflow of its own, which
+      # builds it against the tips of the libraries below it; this step asks
+      # the other question - whether it holds at the gitlinks pinned here.
+      - name: Test the node
+        timeout-minutes: 10
+        run: dotnet test libs/WWCP_Node/WWCP_Node_Tests/WWCP_Node_Tests.csproj --configuration Release --no-build --logger "console;verbosity=normal" --logger "trx;LogFileName=node-${{ matrix.leg }}.trx" --results-directory artifacts
+
+      # The PKI's own tests: what kind of node it is - its names, its roles
+      # and the certificates it keeps - and WWCP_Node's conformance suite asked
+      # of a PKI: the sign-in, the configuration, DNS and NTS, the log and
+      # its event stream, stopping, the certificate store and the web
+      # interface. Nowhere else runs them — libs/PKI has no workflow of its
+      # own, by design: it is not built alone, it is built here.
+      #
+      # No category filter: nothing in this project queries the network. Where
+      # a test cannot hold on a platform it says so itself with Assert.Ignore,
+      # which is a skip in the .trx rather than a silent absence.
+      - name: Test the PKI
+        timeout-minutes: 30
+        run: dotnet test libs/PKI/PKITests/PKITests.csproj --configuration Release --no-build --logger "console;verbosity=normal" --logger "trx;LogFileName=${{ matrix.leg }}.trx" --results-directory artifacts
+
+      # The question no unit test in this repository asks: does it start?
+      # Everything that only happens at startup happens here — the assemblies
+      # resolve, Hermod binds its HTTP server, the HTTPExt API builds an account
+      # store out of nothing, and the web interface turns out to be inside the
+      # assembly rather than merely to have been built.
+      #
+      # Linux only: starting a process in the background, waiting for it and
+      # stopping it again is one shell to get right rather than two. The
+      # Windows leg answers the smaller question below.
+      #
+      # Everything it writes goes to a temporary directory: a first start makes
+      # an account store, a certificate store and a log file, and none of that
+      # belongs in a workspace whose cleanliness the build stamps into every
+      # assembly it produces.
+      #
+      # Three questions are asked of it. "/" must come back as the embedded web
+      # interface. "/api/v1/status" must come back 401, because the JSON API of
+      # a PKI is nobody's business until somebody has signed in — a 200
+      # there would mean the door had come off. And its command line must
+      # answer over SSH, on a port given to it: left to itself it takes twenty
+      # thousand above the web interface's, 38123, which lies in the range
+      # Linux hands out to outgoing connections (32768-60999) and is free
+      # there only by chance - EMSPCLI's container once had it taken. 22123
+      # is below that range on Linux and below Windows' (49152 on), and clear
+      # of the nodes' own defaults (22347-22353).
+      - name: The PKI starts and answers (Debian)
+        if: matrix.leg == 'debian-13-container'
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          set -u
+          tmp="$(mktemp -d)"
+          dotnet PKICLI/bin/Release/net10.0/PKICLI.dll \
+              --port      18123 \
+              --ssh-port  22123 \
+              --accounts  "$tmp/accounts" \
+              --config    "$tmp/configuration.json" \
+              --log-file  "$tmp/logs" \
+              < /dev/null > "$tmp/console.log" 2>&1 &
+          pid=$!
+
+          # curl -w writes "000" itself when it could not connect, so nothing
+          # may add a value of its own behind it; and this shell runs with -e,
+          # so "|| true" keeps curl's exit code from ending the step. The
+          # ${:-000} after it is for the case where there is no curl at all.
+          root=000
+          for _ in $(seq 1 60); do
+              root="$(curl -sS -o "$tmp/index.html" -w '%{http_code}' http://127.0.0.1:18123/ 2>/dev/null || true)"
+              root="${root:-000}"
+              if [ "$root" != 000 ]; then
+                  break
+              fi
+              # Gone rather than slow: stop waiting for it.
+              kill -0 "$pid" 2>/dev/null || break
+              sleep 1
+          done
+
+          api="$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:18123/api/v1/status 2>/dev/null || true)"
+          api="${api:-000}"
+
+          # The first line the SSH server says, read while the PKI still
+          # runs: its version, "SSH-2.0-...". Nothing at all within five
+          # seconds - no server, or one that does not speak - leaves it empty.
+          ssh_banner="$(timeout 5 bash -c 'exec 3<>/dev/tcp/127.0.0.1/22123 && head -n 1 <&3' 2>/dev/null | tr -d '\r' || true)"
+
+          kill "$pid" 2>/dev/null || true
+          wait "$pid" 2>/dev/null || true
+
+          echo "GET /                -> $root"
+          echo "GET /api/v1/status   -> $api"
+          echo "SSH 22123            -> ${ssh_banner:-nothing}"
+
+          # What the banner says this was built from - in every run, not only a
+          # red one, because a stamp that reads "unknown" or "-dirty" is worth
+          # seeing while everything else is green.
+          awk '/^  built from/ { f = 1 } f && !/^  built from/ && !/^                 / { f = 0 } f' "$tmp/console.log" || true
+
+          fault=0
+          if [ "$root" != 200 ]; then
+              echo "The web interface did not answer."
+              fault=1
+          elif ! grep -q "<title>PKI</title>" "$tmp/index.html"; then
+              echo "Something answered, but it is not the embedded web interface."
+              fault=1
+          fi
+          if [ "$api" != 401 ]; then
+              echo "The JSON API answered $api where 401 was expected: it is supposed to be shut to anyone not signed in."
+              fault=1
+          fi
+          case "$ssh_banner" in
+              SSH-2.0-*) ;;
+              *) echo "The SSH server did not answer on 22123."
+                 fault=1 ;;
+          esac
+
+          if [ "$fault" != 0 ]; then
+              echo
+              if kill -0 "$pid" 2>/dev/null; then
+                  echo "It was still running when it was asked."
+              else
+                  echo "It was no longer running when it was asked."
+              fi
+              echo "What it said, without the first-start password:"
+              cat "$tmp/console.log" | grep -v -i password || echo "(nothing at all)"
+              exit 1
+          fi
+
+      # The same question in the form the other leg can answer without process
+      # control: the entry assembly loads, its arguments parse, it exits 0.
+      - name: The PKI runs (Windows)
+        if: runner.os == 'Windows'
+        run: dotnet PKICLI/bin/Release/net10.0/PKICLI.dll --help
+
+      # The console log answers "did it pass" and almost nothing else. TRX keeps,
+      # per test: outcome, duration, error message, stack trace, and the reason
+      # an Assert.Ignore gave — which never reaches the console at all.
+      #
+      # !cancelled() rather than success(): a red run is when these files matter
+      # most, so uploading only on green would throw the evidence away in
+      # exactly the case it is wanted.
+      - name: Upload test results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results-${{ matrix.leg }}
+          path: artifacts/*.trx
