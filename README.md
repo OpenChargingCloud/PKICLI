@@ -54,6 +54,32 @@ It listens on http://127.0.0.1:2360/ - `--any` for every address, `--port`
 for another one, `--help` for every switch. At the first start it makes one
 account, `root`, and shows its password once, on the console.
 
+**`--any` puts the sign-in on the network** - the password, the API keys and
+the session cookie, and with them the private keys `GET
+/v1/pki/certificates/{id}/key` hands out - in the clear, unless the PKI speaks
+HTTPS itself or a proxy in front of it does and is named as trusted. Either
+is said by switches, `--https`, `--https-cert <file>`, `--https-key <file>`,
+`--redirect-port <number>` and `--trusted-proxy <address>`, or in the `web`
+section of the configuration file. Behind nginx:
+
+```json
+"web": { "trustedProxies": [ "127.0.0.1", "::1" ] }
+```
+
+With PEM files of its own (a certificate this PKI issued itself will do) and
+no proxy:
+
+```json
+"web": { "tls": { "certificate": { "fullchain":  "/etc/pki/pki.example.org/fullchain.pem",
+                                   "privateKey": "/etc/pki/pki.example.org/privkey.pem" },
+                  "redirectPort": 80 } }
+```
+
+Neither said, the PKI warns in its log, below its banner and above every page
+of its web interface to its administrators.
+[WWCP_Node's README](https://github.com/OpenChargingCloud/WWCP_Node) says the
+rest.
+
 Beside the solution it writes `configuration.json`, `accounts/`, `logs/`,
 `certificates/` - what the PKI itself believes, the roots of its time servers
 say - and **`pki/`**, what it makes: one file per certificate and one per
