@@ -84,15 +84,26 @@ Beside the solution it writes `configuration.json`, `accounts/`, `logs/`,
 `certificates/` - what the PKI itself believes, the roots of its time servers
 say - and **`pki/`**, what it makes: one file per certificate and one per
 private key, named by the SHA-256 fingerprint, and `index.json` beside them.
-The private keys are kept **unencrypted**; whoever can read `pki/` can sign as
-every CA in it. All of these are in `.gitignore`.
+All of these are in `.gitignore`.
+
+**A private key may have a password, and need not.** Without one it is kept
+unencrypted, and whoever can read `pki/` can sign as every CA whose key has
+none - the log says how many there are at every start. With one, it is an
+`ENCRYPTED PRIVATE KEY` - PKCS#8, AES-256-CBC, its key derived from the
+password by PBKDF2 with SHA-256 and 600,000 iterations - which openssl opens as
+it opens any other. The password is kept nowhere: a CA whose key has one signs
+only where it is given again, and the key of a server's or a client's
+certificate is downloaded encrypted, for whoever has it to open with the
+password. A password has 8 characters at least; one that is forgotten makes
+its key useless. It is given where a key is made, and given, changed or taken
+away later in the details of its certificate.
 
 
 ### The web interface
 
 | | |
 |---|---|
-| **PKI** (`/pki`) | every certificate of the PKI, filtered by a text in its common name and by its profile; the details of one - subject, chain, validity, key, fingerprint - with its PEM to copy or download, its chain, the private key of a server's or client's certificate made here, and Delete; and the forms: **New root CA**, **New sub-CA**, **New certificate** (server or client, with a key made here) and **Sign a CSR** |
+| **PKI** (`/pki`) | every certificate of the PKI, filtered by a text in its common name and by its profile; the details of one - subject, chain, validity, key, fingerprint - with its PEM to copy or download, its chain, the private key of a server's or client's certificate made here, the password of its key, and Delete; and the forms: **New root CA**, **New sub-CA**, **New certificate** (server or client, with a key made here) and **Sign a CSR** |
 | **Configuration** | what the PKI is running, how many certificates of each profile it keeps, and below it the **DNS client**, the **NTS client**, the **SSH server**, the **Trusted certificates** and **Identities** of the node itself |
 | **Logs** | the log as it happens |
 
@@ -110,15 +121,19 @@ What every node answers is WWCP_Node's. The PKI adds, below `/api/v1/pki`:
 |---|---|
 | `GET certificates?commonName=&profile=` | every certificate, or those whose common name holds a text and of a profile (`rootCA`, `subCA`, `server`, `client`) |
 | `GET certificates/{id}` | one, with its PEM, its chain without the root, and how many it signed |
-| `GET certificates/{id}/key` | the private key of a server's or client's certificate made here - never a CA's |
+| `GET certificates/{id}/key` | the private key of a server's or client's certificate made here, as it is kept - encrypted where it has a password, and `encrypted` says so - never a CA's |
+| `POST certificates/{id}/key/password` | `{ password, newPassword }`: give its key a password, change it, or take it away with `null` |
 | `DELETE certificates/{id}?withIssued=true` | delete it, with everything it signed |
-| `POST rootCAs`, `POST subCAs` | `{ subject, keyAlgorithm, validDays, pathLength }`, a sub-CA with its `issuer` |
-| `POST certificates` | `{ issuer, profile, subject, keyAlgorithm, validDays, subjectAlternativeNames }` |
-| `POST csr`, `POST csr/inspect` | `{ issuer, profile, csr, validDays, subjectAlternativeNames, takeSubjectAlternativeNames }`, and what a CSR says before that |
+| `POST rootCAs`, `POST subCAs` | `{ subject, keyAlgorithm, validDays, pathLength, keyPassword }`, a sub-CA with its `issuer` and `issuerKeyPassword` |
+| `POST certificates` | `{ issuer, issuerKeyPassword, profile, subject, keyAlgorithm, validDays, subjectAlternativeNames, keyPassword }` |
+| `POST csr`, `POST csr/inspect` | `{ issuer, issuerKeyPassword, profile, csr, validDays, subjectAlternativeNames, takeSubjectAlternativeNames }`, and what a CSR says before that |
 
 A `subject` is `{ commonName, organization, organizationalUnit, country,
 state, locality }`, of which only the common name is needed. Key algorithms are
 `ecc-p256`, `ecc-p384`, `ecc-p521`, `rsa-2048`, `rsa-3072` and `rsa-4096`.
+`keyPassword` and `issuerKeyPassword` are optional: left out, `null` or empty,
+the new key has no password, and the CA that signs is taken to have none. A
+password is said back by no answer and written to no log.
 
 A CSR is signed for its key and as what was chosen: its subject is taken over,
 its alternative names where that is asked for, and nothing else it asks for -
@@ -141,8 +156,8 @@ certificates below the CAs that are there. The `roles` section of
 ### What is not here yet
 
 Revocation lists and OCSP, certificate transparency logs, a PKCS#12 download,
-a password on the private keys, and an automatic CSR endpoint for charging
-stations of its own (EST, or OCPP's `SignCertificate` through a CSMS).
+and an automatic CSR endpoint for charging stations of its own (EST, or OCPP's
+`SignCertificate` through a CSMS).
 
 
 ## Your participation
