@@ -83,8 +83,9 @@ rest.
 Beside the solution it writes `configuration.json`, `accounts/`, `logs/`,
 `certificates/` - what the PKI itself believes, the roots of its time servers
 say - and **`pki/`**, what it makes: one file per certificate and one per
-private key, named by the SHA-256 fingerprint, and `index.json` beside them.
-All of these are in `.gitignore`.
+private key, named by the SHA-256 fingerprint, `index.json` beside them, and
+`pki/transparency/`, its certificate transparency log. All of these are in
+`.gitignore`.
 
 **A private key may have a password, and need not.** Without one it is kept
 unencrypted, and whoever can read `pki/` can sign as every CA whose key has
@@ -98,12 +99,30 @@ password. A password has 8 characters at least; one that is forgotten makes
 its key useless. It is given where a key is made, and given, changed or taken
 away later in the details of its certificate.
 
+**Every certificate the PKI signs is in its certificate transparency log**,
+after RFC 6962: in the order it was signed, in a Merkle tree whose head the log
+signs with a key of its own, an ECDSA key of P-256 in
+`pki/transparency/log-key.pem`. A certificate is written to the log before it
+is kept anywhere else, so there is none the log does not have, and it stays in
+the log when it is deleted from the PKI - that is the point of one. Whoever
+keeps a signed tree head can have the log prove that a certificate is in it,
+and that the log is the one they saw before, grown and nothing else. A PKI from
+before its log has every certificate it keeps taken in at the first start, CAs
+first.
+
+`entries.jsonl` is only ever appended to, and `sth.json` keeps the newest tree
+head. At every start the log checks every signature in it and its tree against
+that head; where they do not hold - an entry changed or taken out - the log is
+**broken**, signs no tree head, and the PKI signs nothing until it is repaired,
+rather than sign what the log does not have. Half an entry at its end, written
+when the PKI stopped, is cut off.
+
 
 ### The web interface
 
 | | |
 |---|---|
-| **PKI** (`/pki`) | every certificate of the PKI, filtered by a text in its common name and by its profile; the details of one - subject, chain, validity, key, fingerprint - with its PEM to copy or download, its chain, the private key of a server's or client's certificate made here, the password of its key, and Delete; and the forms: **New root CA**, **New sub-CA**, **New certificate** (server or client, with a key made here) and **Sign a CSR** |
+| **PKI** (`/pki`) | every certificate of the PKI, filtered by a text in its common name and by its profile; the details of one - subject, chain, validity, key, fingerprint - with its PEM to copy or download, its chain, the private key of a server's or client's certificate made here, the password of its key, and Delete; and the forms: **New root CA**, **New sub-CA**, **New certificate** (server or client, with a key made here) and **Sign a CSR**; and the **Transparency log**: its address for a monitor, its id, its newest tree head and public key, and every entry, the newest first, a deleted certificate among them |
 | **Configuration** | what the PKI is running, how many certificates of each profile it keeps, and below it the **DNS client**, the **NTS client**, the **SSH server**, the **Trusted certificates** and **Identities** of the node itself |
 | **Logs** | the log as it happens |
 
@@ -127,6 +146,9 @@ What every node answers is WWCP_Node's. The PKI adds, below `/api/v1/pki`:
 | `POST rootCAs`, `POST subCAs` | `{ subject, keyAlgorithm, validDays, pathLength, keyPassword }`, a sub-CA with its `issuer` and `issuerKeyPassword` |
 | `POST certificates` | `{ issuer, issuerKeyPassword, profile, subject, keyAlgorithm, validDays, subjectAlternativeNames, keyPassword }` |
 | `POST csr`, `POST csr/inspect` | `{ issuer, issuerKeyPassword, profile, csr, validDays, subjectAlternativeNames, takeSubjectAlternativeNames }`, and what a CSR says before that |
+| `GET transparency` | the transparency log: its id, its public key, its size, its newest signed tree head, and what is wrong with it |
+| `GET transparency/entries?start=&end=` | its entries, each with what its certificate is and whether the PKI still has it |
+| `GET transparency/ct/v1/...` | what RFC 6962, section 4, has a log answer: `get-sth`, `get-sth-consistency`, `get-proof-by-hash`, `get-entries`, `get-roots` and `get-entry-and-proof` |
 
 A `subject` is `{ commonName, organization, organizationalUnit, country,
 state, locality }`, of which only the common name is needed. Key algorithms are
@@ -140,6 +162,15 @@ its alternative names where that is asked for, and nothing else it asks for -
 a CSR asking to be a CA is still signed as a client's certificate. A program
 that sends CSRs on its own - a backend for its charging stations - signs in
 with an API key of an account in the `registrar` role.
+
+The details of a certificate say where it is in the transparency log, with its
+signed certificate timestamp. A monitor of certificate transparency is pointed
+at `https://<pki>/api/v1/pki/transparency`, the log's public key and its
+maximum merge delay, which is none: a certificate is in the tree as soon as it
+is signed. Unlike the logs of the web, this one is read only by whoever may look
+at the certificates - it names every charging station and every host - so a
+monitor signs in with an API key of an account in the `operator` role. Nothing
+is added from outside: there is no `add-chain`.
 
 
 ### Who may do what
@@ -155,8 +186,9 @@ certificates below the CAs that are there. The `roles` section of
 
 ### What is not here yet
 
-Revocation lists and OCSP, certificate transparency logs, a PKCS#12 download,
-and an automatic CSR endpoint for charging stations of its own (EST, or OCPP's
+Revocation lists and OCSP, a PKCS#12 download, signed certificate timestamps
+inside the certificates themselves - the precertificates of RFC 6962 - and an
+automatic CSR endpoint for charging stations of its own (EST, or OCPP's
 `SignCertificate` through a CSMS).
 
 
