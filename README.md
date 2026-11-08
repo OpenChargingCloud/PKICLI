@@ -83,9 +83,9 @@ rest.
 Beside the solution it writes `configuration.json`, `accounts/`, `logs/`,
 `certificates/` - what the PKI itself believes, the roots of its time servers
 say - and **`pki/`**, what it makes: one file per certificate and one per
-private key, named by the SHA-256 fingerprint, `index.json` beside them, and
-`pki/transparency/`, its certificate transparency log. All of these are in
-`.gitignore`.
+private key, named by the SHA-256 fingerprint, `index.json` beside them,
+`pki/transparency/`, its certificate transparency log, and `pki/revocation/`,
+what it revoked. All of these are in `.gitignore`.
 
 **A private key may have a password, and need not.** Without one it is kept
 unencrypted, and whoever can read `pki/` can sign as every CA whose key has
@@ -117,19 +117,62 @@ that head; where they do not hold - an entry changed or taken out - the log is
 rather than sign what the log does not have. Half an entry at its end, written
 when the PKI stopped, is cut off.
 
+**A certificate is revoked for good**, with a reason of RFC 5280 - not a root,
+which no CA above it can say anything of; a root is believed no more by being
+taken out of every trust store. Revoked, it is in the **CRL** of its CA, signed
+anew at once, and the CA's **OCSP responder** (RFC 6960) answers `revoked` for
+it - also after it is deleted from the PKI, since deleting is not revoking.
+`pki/revocation/revoked.json` lists every revocation, and per CA `<id>.crl` is
+its newest CRL and `<id>.ocsp.crt` and `<id>.ocsp.key` its responder.
+
+A CRL is signed with the key of its CA. Where that key has no password, the
+PKI signs it anew by itself, for 7 days at a time, before half of that is over;
+where it has one, the CRL is signed whenever the password is given - the CA
+signs or revokes a certificate, or its CRL is signed by hand - for 30 days or
+as long as is asked, and the log says when one runs out within 3 days. Revoking
+below such a CA asks for its password, so that its CRL says it at once.
+
+An OCSP response is never signed with the key of a CA, but by a responder the
+CA signed for it, with the extended key usage of OCSP signing and
+`id-pkix-ocsp-nocheck`, whose key has no password: it answers at any hour,
+whatever the CA's key has, and signs nothing but OCSP responses. It is made, and
+made anew 90 days before its year runs out, wherever the CA's key is open, and
+is in the transparency log as everything the PKI signs. It says `good` for a
+certificate the CA signed, `revoked` for one it revoked and `unknown` for a
+serial number it never signed - the transparency log says which were.
+
+Where whoever checks a certificate finds its CRL and the responder is written
+into it - as its CRL distribution point and its authority information access,
+beside the address of its CA's certificate - once the PKI is told the address
+it is reached at from outside: `"pki": { "publicURL": "http://pki.example.org" }`
+in `configuration.json`, or on the Revocation tab. A certificate made before
+names none. http rather than https serves most of whoever checks: a CRL and an
+OCSP response are signed, and checking the certificate of an https server
+would need the very answer being fetched.
+
+**A server's or a client's certificate goes out with its key as PKCS#12**: the
+certificate, its private key and the sub-CAs above it - not the root - in one
+file, encrypted with a password of its own of 8 characters at least, with
+AES-256 and PBKDF2 with SHA-256 - or with Triple-DES and SHA-1, for older
+devices that open nothing else. Its PBKDF2 has the 2,000 iterations of .NET's
+export rather than the 600,000 a key here is kept with, since Windows and .NET
+themselves open no PKCS#12 file of that many: the password of the file is to
+be a long one.
+
 
 ### The web interface
 
 | | |
 |---|---|
-| **PKI** (`/pki`) | every certificate of the PKI, filtered by a text in its common name and by its profile; the details of one - subject, chain, validity, key, fingerprint - with its PEM to copy or download, its chain, the private key of a server's or client's certificate made here, the password of its key, and Delete; and the forms: **New root CA**, **New sub-CA**, **New certificate** (server or client, with a key made here) and **Sign a CSR**; and the **Transparency log**: its address for a monitor, its id, its newest tree head and public key, and every entry, the newest first, a deleted certificate among them |
+| **PKI** (`/pki`) | every certificate of the PKI, filtered by a text in its common name and by its profile; the details of one - subject, chain, validity, key, fingerprint, its revocation, and of a CA its CRL and OCSP responder - with its PEM to copy or download, its chain, its CRL, the private key of a server's or client's certificate made here and the certificate with it as PKCS#12, the password of its key, the CRL of a CA signed anew, Revoke and Delete; and the forms: **New root CA**, **New sub-CA**, **New certificate** (server or client, with a key made here) and **Sign a CSR**; and the **Transparency log**: its address for a monitor, its id, its newest tree head and public key, and every entry, the newest first, a deleted certificate among them; and **Revocation**: the address the PKI is reached at, the CRL and the responder of each CA, and every certificate revoked |
 | **Configuration** | what the PKI is running, how many certificates of each profile it keeps, and below it the **DNS client**, the **NTS client**, the **SSH server**, the **Trusted certificates** and **Identities** of the node itself |
 | **Logs** | the log as it happens |
 
 Deleting is hard and final: the files and the key are gone. A CA that signed
 certificates still in the PKI is deleted only together with everything below
 it, and only after a question that says how many. Deleting is not revoking -
-whoever believes the root of a certificate that went out goes on believing it.
+whoever believes the root of a certificate that went out goes on believing it,
+until it is revoked.
 
 
 ### The JSON API
@@ -142,6 +185,13 @@ What every node answers is WWCP_Node's. The PKI adds, below `/api/v1/pki`:
 | `GET certificates/{id}` | one, with its PEM, its chain without the root, and how many it signed |
 | `GET certificates/{id}/key` | the private key of a server's or client's certificate made here, as it is kept - encrypted where it has a password, and `encrypted` says so - never a CA's |
 | `POST certificates/{id}/key/password` | `{ password, newPassword }`: give its key a password, change it, or take it away with `null` |
+| `POST certificates/{id}/pkcs12` | `{ keyPassword, pkcs12Password, legacy }`: the certificate, its key and the sub-CAs above it as PKCS#12, in Base64 - never a CA's |
+| `POST certificates/{id}/revoke` | `{ reason, issuerKeyPassword }`: revoke it for good, for `unspecified`, `keyCompromise`, `caCompromise`, `affiliationChanged`, `superseded`, `cessationOfOperation` or `privilegeWithdrawn` |
+| `POST certificates/{id}/crl` | `{ keyPassword, validDays }`: sign the CRL of a CA anew |
+| `GET revocation`, `PUT revocation` | the address the PKI is reached at, `{ publicURL }`, the CRL and the responder of each CA, and every certificate revoked |
+| `GET crl/{id}.crl` | the newest CRL of a CA, as DER - to anybody |
+| `GET ca/{id}.crt` | the certificate of a CA, as DER - to anybody |
+| `POST ocsp`, `GET ocsp/{request}` | the OCSP responder of RFC 6960 - to anybody |
 | `DELETE certificates/{id}?withIssued=true` | delete it, with everything it signed |
 | `POST rootCAs`, `POST subCAs` | `{ subject, keyAlgorithm, validDays, pathLength, keyPassword }`, a sub-CA with its `issuer` and `issuerKeyPassword` |
 | `POST certificates` | `{ issuer, issuerKeyPassword, profile, subject, keyAlgorithm, validDays, subjectAlternativeNames, keyPassword }` |
@@ -172,13 +222,22 @@ at the certificates - it names every charging station and every host - so a
 monitor signs in with an API key of an account in the `operator` role. Nothing
 is added from outside: there is no `add-chain`.
 
+The CRLs, the certificates of the CAs and the OCSP responder are open to
+everybody, as RFC 5280 and RFC 6960 have them: whoever checks a certificate does
+so before signing in to anything, and what they say names nobody. One request
+asks about the certificates of one CA. Asked with GET, the Base64 of the
+request goes into the path with its slashes as they are: the HTTP server
+refuses a path with `%2F` in it, and a client that writes them so is to POST.
+
 
 ### Who may do what
 
 The node's `viewer` may look at everything and `systemadmin` may do
-everything. A PKI adds two resources, `authorities` - making and deleting CAs -
-and `issuance` - signing certificates for servers and clients, downloading
-their keys and deleting them - and two roles: `operator`, who looks at
+everything. A PKI adds two resources, `authorities` - making, revoking and
+deleting CAs, signing their CRLs by hand and setting the address the PKI is
+reached at - and `issuance` - signing certificates for servers and clients,
+downloading their keys, also as PKCS#12, revoking and deleting them - and two
+roles: `operator`, who looks at
 everything and asks whether the network works, and `registrar`, who signs
 certificates below the CAs that are there. The `roles` section of
 `configuration.json` may add more, as on every node.
@@ -186,10 +245,9 @@ certificates below the CAs that are there. The `roles` section of
 
 ### What is not here yet
 
-Revocation lists and OCSP, a PKCS#12 download, signed certificate timestamps
-inside the certificates themselves - the precertificates of RFC 6962 - and an
-automatic CSR endpoint for charging stations of its own (EST, or OCPP's
-`SignCertificate` through a CSMS).
+Signed certificate timestamps inside the certificates themselves - the
+precertificates of RFC 6962 - and an automatic CSR endpoint for charging
+stations of its own (EST, or OCPP's `SignCertificate` through a CSMS).
 
 
 ## Your participation
