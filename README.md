@@ -168,14 +168,15 @@ would need the very answer being fetched.
 signs and those above it, `simpleenroll` signs a CSR - a PKCS#10 in Base64, as
 `application/pkcs10` - and answers with the certificate, both as a certs-only
 PKCS#7 in Base64; `simplereenroll` renews one, and `csrattrs` asks nothing in
-particular. What a CSR is signed as is what the PKI was told, whatever the CSR
+particular - but for ISO 15118, below. What a CSR is signed as is what the PKI was told, whatever the CSR
 asks for - its subject and its names are taken, nothing else:
 
 ```json
 "pki": {
   "est": {
     "issuer": "<fingerprint of a CA>", "profile": "client", "validDays": 365,
-    "labels": { "csms": { "issuer": "<fingerprint of a CA>", "profile": "server", "validDays": 365 } },
+    "labels": { "csms": { "issuer": "<fingerprint of a CA>", "profile": "server", "validDays": 365 },
+                "secc": { "issuer": "<fingerprint of a CPO sub-CA>", "v2g": "CPO", "validDays": 365 } },
     "tlsClientCertificates": true,
     "serverKeyGeneration": false
   }
@@ -242,12 +243,26 @@ sub-CA below a V2G root may be of any domain but `CPO`; below any other CA it is
 of its CA's domain. A SECC certificate stands below a CA of `V2G`, every other
 certificate below one of its own domain.
 
+**A charging station enrolls its SECC certificate over EST**, as it does its
+other certificates: below a CA of ISO 15118, EST signs what that CA signs - a
+SECC certificate below a sub-CA of `V2G`, a contract certificate below one of
+`MO` - and says so in its settings where it is not told, as `v2g`; below a CA
+of X.509, nothing of ISO 15118, and the other way round. `csrattrs` asks the
+station for a key of secp256r1 and a signature of ECDSA with SHA-256, as RFC
+7030, section 4.5.2, has it; a CSR for any other key is refused. The subject of
+the CSR is given its DomainComponent where it names none - and refused where it
+names another - and the names it asks for are not taken. A SECC certificate
+renews itself as every certificate does, and `serverkeygen` makes it a key of
+secp256r1, whatever the CSR was signed with. That is where a CSMS sends the CSR
+of a station's `SignCertificateRequest` of OCPP 2.0.1 for its
+`V2GCertificate`, at the label of its CPO sub-CA.
+
 
 ### The web interface
 
 | | |
 |---|---|
-| **PKI** (`/pki`) | every certificate of the PKI, filtered by a text in its common name and by its profile; the details of one - subject, chain, validity, key, fingerprint, its revocation, and of a CA its CRL and OCSP responder - with its PEM to copy or download, its chain, its CRL, the private key of a server's or client's certificate made here and the certificate with it as PKCS#12, the password of its key, the CRL of a CA signed anew, Revoke and Delete; and the forms: **New root CA**, **New sub-CA**, **New certificate** (server or client, with a key made here) and **Sign a CSR**; and the **Transparency log**: its address for a monitor, its id, its newest tree head and public key, and every entry, the newest first, a deleted certificate among them; **Revocation**: the address the PKI is reached at, the CRL and the responder of each CA, and every certificate revoked; and **EST**: what it signs without a label and at each label, whether it asks for a TLS client certificate, and whether it makes keys at `serverkeygen`. A root CA may be made as one of ISO 15118; below a CA of it, the forms make certificates of ISO 15118 - a sub-CA of the domain chosen, a SECC, contract, OEM provisioning or CPS certificate as its CA's domain has it - and ask neither for a key nor for other names. The details of a certificate say whether it carries its timestamp, and the transparency log which entries are precertificates |
+| **PKI** (`/pki`) | every certificate of the PKI, filtered by a text in its common name and by its profile; the details of one - subject, chain, validity, key, fingerprint, its revocation, and of a CA its CRL and OCSP responder - with its PEM to copy or download, its chain, its CRL, the private key of a server's or client's certificate made here and the certificate with it as PKCS#12, the password of its key, the CRL of a CA signed anew, Revoke and Delete; and the forms: **New root CA**, **New sub-CA**, **New certificate** (server or client, with a key made here) and **Sign a CSR**; and the **Transparency log**: its address for a monitor, its id, its newest tree head and public key, and every entry, the newest first, a deleted certificate among them; **Revocation**: the address the PKI is reached at, the CRL and the responder of each CA, and every certificate revoked; and **EST**: what it signs without a label and at each label, whether it asks for a TLS client certificate, and whether it makes keys at `serverkeygen`. A root CA may be made as one of ISO 15118; below a CA of it, the forms make certificates of ISO 15118 - a sub-CA of the domain chosen, a SECC, contract, OEM provisioning or CPS certificate as its CA's domain has it - and ask neither for a key nor for other names, and EST below one says what it signs in place of server or client. The details of a certificate say whether it carries its timestamp, and the transparency log which entries are precertificates |
 | **Configuration** | what the PKI is running, how many certificates of each profile it keeps, and below it the **DNS client**, the **NTS client**, the **SSH server**, the **Trusted certificates** and **Identities** of the node itself |
 | **Logs** | the log as it happens |
 
@@ -275,7 +290,7 @@ What every node answers is WWCP_Node's. The PKI adds, below `/api/v1/pki`:
 | `GET crl/{id}.crl` | the newest CRL of a CA, as DER - to anybody |
 | `GET ca/{id}.crt` | the certificate of a CA, as DER - to anybody |
 | `POST ocsp`, `GET ocsp/{request}` | the OCSP responder of RFC 6960 - to anybody |
-| `GET est`, `PUT est` | what EST signs: `{ issuer, profile, validDays, labels, tlsClientCertificates, serverKeyGeneration }` |
+| `GET est`, `PUT est` | what EST signs: `{ issuer, profile, validDays, v2g, labels, tlsClientCertificates, serverKeyGeneration }`, each label `{ issuer, profile, validDays, v2g }` |
 | `DELETE certificates/{id}?withIssued=true` | delete it, with everything it signed |
 | `POST rootCAs`, `POST subCAs` | `{ subject, keyAlgorithm, validDays, pathLength, keyPassword, v2g }`, a sub-CA with its `issuer` and `issuerKeyPassword` |
 | `POST certificates` | `{ issuer, issuerKeyPassword, profile, subject, keyAlgorithm, validDays, subjectAlternativeNames, keyPassword, v2g }` |
@@ -340,9 +355,8 @@ certificates below the CAs that are there. The `roles` section of
 
 CMC over EST (`fullcmc`), and a key from `serverkeygen` encrypted to a key of
 the station's rather than protected by TLS alone; the certificates of ISO
-15118-20, with their keys of secp521r1 and Ed448; EST signing certificates of
-ISO 15118; and OCPP's `SignCertificate` taken from a CSMS rather than the CSMS
-enrolling over EST.
+15118-20, with their keys of secp521r1 and Ed448; and OCPP's `SignCertificate`
+taken from a CSMS rather than the CSMS enrolling over EST.
 
 
 ## Your participation
