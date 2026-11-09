@@ -117,6 +117,19 @@ that head; where they do not hold - an entry changed or taken out - the log is
 rather than sign what the log does not have. Half an entry at its end, written
 when the PKI stopped, is cut off.
 
+**A server's or a client's certificate carries its signed certificate timestamp
+in itself**, as RFC 6962, section 3.1, has it: the CA first signs a
+precertificate - the certificate to be, with the critical poison extension, so
+that nothing believes it - the log signs the timestamp of that, and the
+certificate is signed with the timestamp where the poison was, and is otherwise
+the same, byte for byte; the log checks that before it writes its entry. A TLS
+client that checks certificate transparency - `openssl s_client -ct`, a browser
+with the log among those it knows - checks it from the certificate alone. The
+log keeps the precertificate as a `precert_entry`, and `get-entries` hands it
+out with its `PrecertChainEntry`. CAs carry no timestamp, nor does a certificate
+of ISO 15118, whose profiles have no room for one: they are in the log as
+themselves.
+
 **A certificate is revoked for good**, with a reason of RFC 5280 - not a root,
 which no CA above it can say anything of; a root is believed no more by being
 taken out of every trust store. Revoked, it is in the **CRL** of its CA, signed
@@ -163,7 +176,8 @@ asks for - its subject and its names are taken, nothing else:
   "est": {
     "issuer": "<fingerprint of a CA>", "profile": "client", "validDays": 365,
     "labels": { "csms": { "issuer": "<fingerprint of a CA>", "profile": "server", "validDays": 365 } },
-    "tlsClientCertificates": true
+    "tlsClientCertificates": true,
+    "serverKeyGeneration": false
   }
 }
 ```
@@ -181,6 +195,17 @@ browser that has certificates of its own may ask which one to show. Behind a
 proxy that ends TLS, a station renews with an API key. The CA signs without
 anybody there, so a CA whose key has a password signs nothing over EST.
 
+With `serverKeyGeneration`, `serverkeygen` makes the key for a station that
+cannot make one of its own: its CSR carries the subject and the names, and its
+key and its signature are not looked at, as RFC 7030, section 4.4.1, has it.
+The PKI makes a key of the kind the CSR was signed with - where it makes those,
+ECC P-256 otherwise - and answers `multipart/mixed`: the key as PKCS#8 in
+Base64, unencrypted, and the certificate as at `simpleenroll`. Over HTTPS only
+- the PKI's own, or that of a trusted proxy in front - since TLS is all that
+protects the key on its way; over plain HTTP it is refused. The key stays in the
+PKI, as every key it makes does. Who may ask is who may enroll, or who renews
+with the certificate it renews.
+
 **A server's or a client's certificate goes out with its key as PKCS#12**: the
 certificate, its private key and the sub-CAs above it - not the root - in one
 file, encrypted with a password of its own of 8 characters at least, with
@@ -190,12 +215,39 @@ export rather than the 600,000 a key here is kept with, since Windows and .NET
 themselves open no PKCS#12 file of that many: the password of the file is to
 be a long one.
 
+**The certificates of ISO 15118-2 - Plug & Charge** - are made as its profiles
+have them. A root CA is made as one of them, of the domain `V2G` - the root of
+charging station operators - `MO` or `OEM`; below it the PKI makes certificates
+of ISO 15118 only, and none of them below a CA of X.509 of its own:
+
+| Certificate | Profile | Domain | Key usage, critical |
+|---|---|---|---|
+| V2G, MO or OEM root CA | root CA | `V2G`, `MO`, `OEM` | keyCertSign, cRLSign |
+| sub-CA | sub-CA | `V2G` (a CPO's), `MO`, `OEM`, `CPS` | keyCertSign, cRLSign |
+| SECC certificate | server | `CPO` | digitalSignature, keyAgreement |
+| contract certificate | client | `MO` | digitalSignature, nonRepudiation, keyEncipherment, keyAgreement |
+| OEM provisioning certificate | client | `OEM` | digitalSignature, keyAgreement |
+| CPS certificate | client | `CPS` | digitalSignature |
+
+Every key is ECC P-256 and every signature ECDSA with SHA-256; the domain is
+the DomainComponent, first in the subject - put there where a CSR names none,
+and a CSR of another domain is not signed. A root has at most two sub-CAs below
+it, the first of path length 1 and the second of 0. A certificate carries basic
+constraints and its key usage, both critical, its key identifiers and - below a
+root, where the PKI was told its address - its CRL and its OCSP responder, but
+not where its CA is found, and nothing else: no extended key usage, no
+alternative names, no signed certificate timestamp. ISO 15118-2 carries a
+certificate in 800 bytes at most, and one that would be larger is not made. A
+sub-CA below a V2G root may be of any domain but `CPO`; below any other CA it is
+of its CA's domain. A SECC certificate stands below a CA of `V2G`, every other
+certificate below one of its own domain.
+
 
 ### The web interface
 
 | | |
 |---|---|
-| **PKI** (`/pki`) | every certificate of the PKI, filtered by a text in its common name and by its profile; the details of one - subject, chain, validity, key, fingerprint, its revocation, and of a CA its CRL and OCSP responder - with its PEM to copy or download, its chain, its CRL, the private key of a server's or client's certificate made here and the certificate with it as PKCS#12, the password of its key, the CRL of a CA signed anew, Revoke and Delete; and the forms: **New root CA**, **New sub-CA**, **New certificate** (server or client, with a key made here) and **Sign a CSR**; and the **Transparency log**: its address for a monitor, its id, its newest tree head and public key, and every entry, the newest first, a deleted certificate among them; **Revocation**: the address the PKI is reached at, the CRL and the responder of each CA, and every certificate revoked; and **EST**: what it signs without a label and at each label, and whether it asks for a TLS client certificate |
+| **PKI** (`/pki`) | every certificate of the PKI, filtered by a text in its common name and by its profile; the details of one - subject, chain, validity, key, fingerprint, its revocation, and of a CA its CRL and OCSP responder - with its PEM to copy or download, its chain, its CRL, the private key of a server's or client's certificate made here and the certificate with it as PKCS#12, the password of its key, the CRL of a CA signed anew, Revoke and Delete; and the forms: **New root CA**, **New sub-CA**, **New certificate** (server or client, with a key made here) and **Sign a CSR**; and the **Transparency log**: its address for a monitor, its id, its newest tree head and public key, and every entry, the newest first, a deleted certificate among them; **Revocation**: the address the PKI is reached at, the CRL and the responder of each CA, and every certificate revoked; and **EST**: what it signs without a label and at each label, whether it asks for a TLS client certificate, and whether it makes keys at `serverkeygen`. A root CA may be made as one of ISO 15118; below a CA of it, the forms make certificates of ISO 15118 - a sub-CA of the domain chosen, a SECC, contract, OEM provisioning or CPS certificate as its CA's domain has it - and ask neither for a key nor for other names. The details of a certificate say whether it carries its timestamp, and the transparency log which entries are precertificates |
 | **Configuration** | what the PKI is running, how many certificates of each profile it keeps, and below it the **DNS client**, the **NTS client**, the **SSH server**, the **Trusted certificates** and **Identities** of the node itself |
 | **Logs** | the log as it happens |
 
@@ -223,17 +275,23 @@ What every node answers is WWCP_Node's. The PKI adds, below `/api/v1/pki`:
 | `GET crl/{id}.crl` | the newest CRL of a CA, as DER - to anybody |
 | `GET ca/{id}.crt` | the certificate of a CA, as DER - to anybody |
 | `POST ocsp`, `GET ocsp/{request}` | the OCSP responder of RFC 6960 - to anybody |
-| `GET est`, `PUT est` | what EST signs: `{ issuer, profile, validDays, labels, tlsClientCertificates }` |
+| `GET est`, `PUT est` | what EST signs: `{ issuer, profile, validDays, labels, tlsClientCertificates, serverKeyGeneration }` |
+| `DELETE certificates/{id}?withIssued=true` | delete it, with everything it signed |
+| `POST rootCAs`, `POST subCAs` | `{ subject, keyAlgorithm, validDays, pathLength, keyPassword, v2g }`, a sub-CA with its `issuer` and `issuerKeyPassword` |
+| `POST certificates` | `{ issuer, issuerKeyPassword, profile, subject, keyAlgorithm, validDays, subjectAlternativeNames, keyPassword, v2g }` |
+| `POST csr`, `POST csr/inspect` | `{ issuer, issuerKeyPassword, profile, csr, validDays, subjectAlternativeNames, takeSubjectAlternativeNames, v2g }`, and what a CSR says before that |
+| `GET transparency` | the transparency log: its id, its public key, its size, its newest signed tree head, and what is wrong with it |
+| `GET transparency/entries?start=&end=` | its entries, each with what its certificate is, whether it is a precertificate and whether the PKI still has it |
+| `GET transparency/ct/v1/...` | what RFC 6962, section 4, has a log answer: `get-sth`, `get-sth-consistency`, `get-proof-by-hash`, `get-entries`, `get-roots` and `get-entry-and-proof` |
 
 And EST itself at `/.well-known/est[/<label>]/`: `GET cacerts`, `POST
-simpleenroll`, `POST simplereenroll` and `GET csrattrs`.
-| `DELETE certificates/{id}?withIssued=true` | delete it, with everything it signed |
-| `POST rootCAs`, `POST subCAs` | `{ subject, keyAlgorithm, validDays, pathLength, keyPassword }`, a sub-CA with its `issuer` and `issuerKeyPassword` |
-| `POST certificates` | `{ issuer, issuerKeyPassword, profile, subject, keyAlgorithm, validDays, subjectAlternativeNames, keyPassword }` |
-| `POST csr`, `POST csr/inspect` | `{ issuer, issuerKeyPassword, profile, csr, validDays, subjectAlternativeNames, takeSubjectAlternativeNames }`, and what a CSR says before that |
-| `GET transparency` | the transparency log: its id, its public key, its size, its newest signed tree head, and what is wrong with it |
-| `GET transparency/entries?start=&end=` | its entries, each with what its certificate is and whether the PKI still has it |
-| `GET transparency/ct/v1/...` | what RFC 6962, section 4, has a log answer: `get-sth`, `get-sth-consistency`, `get-proof-by-hash`, `get-entries`, `get-roots` and `get-entry-and-proof` |
+simpleenroll`, `POST simplereenroll`, `POST serverkeygen` and `GET csrattrs`.
+
+`v2g` makes a certificate of ISO 15118, of the domain it names - `V2G`, `CPO`,
+`MO`, `OEM` or `CPS` - with ECC P-256 where no key is asked for; a certificate
+of a server or a client takes its profile from it where none is given, `server`
+for `CPO` and `client` for every other. Every certificate says its `v2g`, or
+`null`.
 
 A `subject` is `{ commonName, organization, organizationalUnit, country,
 state, locality }`, of which only the common name is needed. Key algorithms are
@@ -249,7 +307,7 @@ that sends CSRs on its own - a backend for its charging stations - signs in
 with an API key of an account in the `registrar` role.
 
 The details of a certificate say where it is in the transparency log, with its
-signed certificate timestamp. A monitor of certificate transparency is pointed
+signed certificate timestamp, and whether the certificate carries it itself. A monitor of certificate transparency is pointed
 at `https://<pki>/api/v1/pki/transparency`, the log's public key and its
 maximum merge delay, which is none: a certificate is in the tree as soon as it
 is signed. Unlike the logs of the web, this one is read only by whoever may look
@@ -280,10 +338,11 @@ certificates below the CAs that are there. The `roles` section of
 
 ### What is not here yet
 
-Signed certificate timestamps inside the certificates themselves - the
-precertificates of RFC 6962 - the keys EST could make for a station
-(`serverkeygen`) and CMC (`fullcmc`), and OCPP's `SignCertificate` taken from a
-CSMS rather than the CSMS enrolling over EST.
+CMC over EST (`fullcmc`), and a key from `serverkeygen` encrypted to a key of
+the station's rather than protected by TLS alone; the certificates of ISO
+15118-20, with their keys of secp521r1 and Ed448; EST signing certificates of
+ISO 15118; and OCPP's `SignCertificate` taken from a CSMS rather than the CSMS
+enrolling over EST.
 
 
 ## Your participation
