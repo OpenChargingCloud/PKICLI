@@ -255,7 +255,9 @@ names another - and the names it asks for are not taken. A SECC certificate
 renews itself as every certificate does, and `serverkeygen` makes it a key of
 secp256r1, whatever the CSR was signed with. That is where a CSMS sends the CSR
 of a station's `SignCertificateRequest` of OCPP 2.0.1 for its
-`V2GCertificate`, at the label of its CPO sub-CA.
+`V2GCertificate`, at the label of its CPO sub-CA - as the
+[CSMS](https://github.com/OpenChargingCloud/CSMS#the-stations-certificates-signed-by-a-pki)
+of OpenChargingCloud does, signed in with an API key of the `registrar` role.
 
 
 ### The web interface
@@ -355,8 +357,7 @@ certificates below the CAs that are there. The `roles` section of
 
 CMC over EST (`fullcmc`), and a key from `serverkeygen` encrypted to a key of
 the station's rather than protected by TLS alone; the certificates of ISO
-15118-20, with their keys of secp521r1 and Ed448; and OCPP's `SignCertificate`
-taken from a CSMS rather than the CSMS enrolling over EST.
+15118-20, with their keys of secp521r1 and Ed448.
 
 
 ## Your participation
