@@ -150,6 +150,37 @@ names none. http rather than https serves most of whoever checks: a CRL and an
 OCSP response are signed, and checking the certificate of an https server
 would need the very answer being fetched.
 
+**Charging stations enroll themselves over EST**, RFC 7030, at
+`/.well-known/est` of the PKI's HTTP server: `cacerts` hands out the CA that
+signs and those above it, `simpleenroll` signs a CSR - a PKCS#10 in Base64, as
+`application/pkcs10` - and answers with the certificate, both as a certs-only
+PKCS#7 in Base64; `simplereenroll` renews one, and `csrattrs` asks nothing in
+particular. What a CSR is signed as is what the PKI was told, whatever the CSR
+asks for - its subject and its names are taken, nothing else:
+
+```json
+"pki": {
+  "est": {
+    "issuer": "<fingerprint of a CA>", "profile": "client", "validDays": 365,
+    "labels": { "csms": { "issuer": "<fingerprint of a CA>", "profile": "server", "validDays": 365 } },
+    "tlsClientCertificates": true
+  }
+}
+```
+
+A request at `/.well-known/est/simpleenroll` is signed as the section itself
+says, one at `/.well-known/est/csms/simpleenroll` as its label `csms` says; the
+EST tab of the web interface says the same. Who enrolls signs in with an API key
+or HTTP Basic, as an account that may sign certificates of servers and clients
+- a backend of charging stations in the `registrar` role, say. Who renews may
+instead show the certificate it renews as its TLS client certificate, where the
+PKI speaks HTTPS of its own and `tlsClientCertificates` has it ask for one: a
+certificate of this PKI, valid and not revoked, renews itself for a new key and
+the same subject and names, nobody signed in. Asked for and never demanded - a
+browser that has certificates of its own may ask which one to show. Behind a
+proxy that ends TLS, a station renews with an API key. The CA signs without
+anybody there, so a CA whose key has a password signs nothing over EST.
+
 **A server's or a client's certificate goes out with its key as PKCS#12**: the
 certificate, its private key and the sub-CAs above it - not the root - in one
 file, encrypted with a password of its own of 8 characters at least, with
@@ -164,7 +195,7 @@ be a long one.
 
 | | |
 |---|---|
-| **PKI** (`/pki`) | every certificate of the PKI, filtered by a text in its common name and by its profile; the details of one - subject, chain, validity, key, fingerprint, its revocation, and of a CA its CRL and OCSP responder - with its PEM to copy or download, its chain, its CRL, the private key of a server's or client's certificate made here and the certificate with it as PKCS#12, the password of its key, the CRL of a CA signed anew, Revoke and Delete; and the forms: **New root CA**, **New sub-CA**, **New certificate** (server or client, with a key made here) and **Sign a CSR**; and the **Transparency log**: its address for a monitor, its id, its newest tree head and public key, and every entry, the newest first, a deleted certificate among them; and **Revocation**: the address the PKI is reached at, the CRL and the responder of each CA, and every certificate revoked |
+| **PKI** (`/pki`) | every certificate of the PKI, filtered by a text in its common name and by its profile; the details of one - subject, chain, validity, key, fingerprint, its revocation, and of a CA its CRL and OCSP responder - with its PEM to copy or download, its chain, its CRL, the private key of a server's or client's certificate made here and the certificate with it as PKCS#12, the password of its key, the CRL of a CA signed anew, Revoke and Delete; and the forms: **New root CA**, **New sub-CA**, **New certificate** (server or client, with a key made here) and **Sign a CSR**; and the **Transparency log**: its address for a monitor, its id, its newest tree head and public key, and every entry, the newest first, a deleted certificate among them; **Revocation**: the address the PKI is reached at, the CRL and the responder of each CA, and every certificate revoked; and **EST**: what it signs without a label and at each label, and whether it asks for a TLS client certificate |
 | **Configuration** | what the PKI is running, how many certificates of each profile it keeps, and below it the **DNS client**, the **NTS client**, the **SSH server**, the **Trusted certificates** and **Identities** of the node itself |
 | **Logs** | the log as it happens |
 
@@ -192,6 +223,10 @@ What every node answers is WWCP_Node's. The PKI adds, below `/api/v1/pki`:
 | `GET crl/{id}.crl` | the newest CRL of a CA, as DER - to anybody |
 | `GET ca/{id}.crt` | the certificate of a CA, as DER - to anybody |
 | `POST ocsp`, `GET ocsp/{request}` | the OCSP responder of RFC 6960 - to anybody |
+| `GET est`, `PUT est` | what EST signs: `{ issuer, profile, validDays, labels, tlsClientCertificates }` |
+
+And EST itself at `/.well-known/est[/<label>]/`: `GET cacerts`, `POST
+simpleenroll`, `POST simplereenroll` and `GET csrattrs`.
 | `DELETE certificates/{id}?withIssued=true` | delete it, with everything it signed |
 | `POST rootCAs`, `POST subCAs` | `{ subject, keyAlgorithm, validDays, pathLength, keyPassword }`, a sub-CA with its `issuer` and `issuerKeyPassword` |
 | `POST certificates` | `{ issuer, issuerKeyPassword, profile, subject, keyAlgorithm, validDays, subjectAlternativeNames, keyPassword }` |
@@ -235,9 +270,9 @@ refuses a path with `%2F` in it, and a client that writes them so is to POST.
 The node's `viewer` may look at everything and `systemadmin` may do
 everything. A PKI adds two resources, `authorities` - making, revoking and
 deleting CAs, signing their CRLs by hand and setting the address the PKI is
-reached at - and `issuance` - signing certificates for servers and clients,
-downloading their keys, also as PKCS#12, revoking and deleting them - and two
-roles: `operator`, who looks at
+reached at, and what EST signs - and `issuance` - signing certificates for
+servers and clients, also over EST, downloading their keys, also as PKCS#12,
+revoking and deleting them - and two roles: `operator`, who looks at
 everything and asks whether the network works, and `registrar`, who signs
 certificates below the CAs that are there. The `roles` section of
 `configuration.json` may add more, as on every node.
@@ -246,8 +281,9 @@ certificates below the CAs that are there. The `roles` section of
 ### What is not here yet
 
 Signed certificate timestamps inside the certificates themselves - the
-precertificates of RFC 6962 - and an automatic CSR endpoint for charging
-stations of its own (EST, or OCPP's `SignCertificate` through a CSMS).
+precertificates of RFC 6962 - the keys EST could make for a station
+(`serverkeygen`) and CMC (`fullcmc`), and OCPP's `SignCertificate` taken from a
+CSMS rather than the CSMS enrolling over EST.
 
 
 ## Your participation
