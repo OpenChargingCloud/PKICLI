@@ -275,6 +275,21 @@ whoever believes the root of a certificate that went out goes on believing it,
 until it is revoked.
 
 
+### The command line
+
+The prompt, `pki:2360>`, has the commands every node has - `help`, `syncNTS`,
+`queryDNS` and the rest - and beside them what only a PKI can be told:
+
+| | |
+|---|---|
+| `pki [<text>]` | every certificate, one line each - what it is, its common name, until when it holds, its status and the beginning of its fingerprint - or those with `<text>` in their common name |
+
+Whoever signs in over SSH gets the same, at the permissions of their account:
+`pki` asks for what the list of the web interface asks for. The command line is
+the PKI library's, in `libs/PKI/PKI/CommandLine/`, and not this program's, so
+that a PKI run by its tests has the same commands, and they are tested there.
+
+
 ### The JSON API
 
 What every node answers is WWCP_Node's. The PKI adds, below `/api/v1/pki`:

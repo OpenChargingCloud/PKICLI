@@ -112,10 +112,6 @@ namespace cloud.charging.open.PKI
             await using (pki)
             {
 
-                // What somebody signed in over SSH gets: this program's own command
-                // line, with its commands beside the node's.
-                pki.CommandLines = (terminal, caller) => new PKICLI(pki, terminal, caller);
-
                 if (pki.ImportCertificates(arguments, out _) is Int32 notImported)
                     return notImported;
 
