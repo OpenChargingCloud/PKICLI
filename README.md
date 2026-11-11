@@ -42,7 +42,7 @@ git submodule update --init --recursive
 
 ### Building and running it
 
-.NET 10 and Node 22 or newer. The build runs `npm ci` and `npm run build` for
+.NET 11 and Node 22 or newer. The build runs `npm ci` and `npm run build` for
 the web interface itself whenever its inputs changed:
 
 ```
