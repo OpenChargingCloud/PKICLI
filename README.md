@@ -283,9 +283,21 @@ The prompt, `pki:2360>`, has the commands every node has - `help`, `syncNTS`,
 | | |
 |---|---|
 | `pki [<text>]` | every certificate, one line each - what it is, its common name, until when it holds, its status and the beginning of its fingerprint - or those with `<text>` in their common name |
+| `pkiShow <certificate>` | one certificate: its subject, who signed it, its serial number, until when it holds, its key, its names, its chain and its revocation; of a CA how many it signed, its CRL and its OCSP responder - never its PEM or its key |
+| `pkiRevoke <certificate> <reason>` | revoke it for good, for `unspecified`, `keyCompromise`, `caCompromise`, `affiliationChanged`, `superseded`, `cessationOfOperation` or `privilegeWithdrawn` |
+| `pkiRevoked` | every certificate revoked, the latest first: when, why, by whom, and below which CA |
+| `pkiCRL` | the CRL of every CA: its number, how many it names, until when it is believed - or since when it is out of date - and where it is fetched |
+| `pkiSignCRL <CA> [<days>]` | sign the CRL of a CA anew |
+| `pkiEST` | what EST signs without a label and at each label, below which CA and for how long |
+
+A `<certificate>` is the beginning of its fingerprint, four characters at
+least, as `pki` writes it, or its whole common name; where more than one
+answers to it, nothing is done. No command takes a password - a command line
+keeps what is typed at it - so below a CA whose key has one, `pkiRevoke` and
+`pkiSignCRL` say that the web interface asks for it, and do nothing.
 
 Whoever signs in over SSH gets the same, at the permissions of their account:
-`pki` asks for what the list of the web interface asks for. The command line is
+each command asks for what the web interface asks for. The command line is
 the PKI library's, in `libs/PKI/PKI/CommandLine/`, and not this program's, so
 that a PKI run by its tests has the same commands, and they are tested there.
 
