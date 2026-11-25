@@ -1,5 +1,7 @@
 # PKICLI
 
+![The EV charging test environment, the PKI (PKI) highlighted](docs/EVChargingTestEnvironment.svg)
+
 [![CI](https://github.com/OpenChargingCloud/PKICLI/actions/workflows/ci.yml/badge.svg)](https://github.com/OpenChargingCloud/PKICLI/actions/workflows/ci.yml)
 [![Nightly](https://github.com/OpenChargingCloud/PKICLI/actions/workflows/nightly.yml/badge.svg)](https://github.com/OpenChargingCloud/PKICLI/actions/workflows/nightly.yml)
 
