@@ -209,6 +209,60 @@ protects the key on its way; over plain HTTP it is refused. The key stays in the
 PKI, as every key it makes does. Who may ask is who may enroll, or who renews
 with the certificate it renews.
 
+**Servers get their certificates over ACME**, RFC 8555 - what Let's Encrypt
+speaks - at `/acme/directory` of the PKI's HTTP server: certbot, acme.sh,
+Caddy, Traefik or [Hermod](https://github.com/Vanaheimr/Hermod)'s
+`ACMECertificateManager` is pointed there instead of at Let's Encrypt, proves
+that the names are its own, and renews the certificate without anybody there.
+A name is proven by `http-01` - the key authorization at
+`/.well-known/acme-challenge/<token>` on port 80 of the name, redirects
+followed - or by `dns-01` - its digest in a TXT record of `_acme-challenge`
+below the name, as the name servers of the PKI see it. A wildcard is proven by
+`dns-01` only, an address (RFC 8738) by `http-01` only, and a name once proven
+stays proven for its account for 30 days. What is signed is a certificate for
+the names of the order exactly, with the first of them as its common name and
+nothing else of the CSR but its key:
+
+```json
+"pki": {
+  "acme": {
+    "issuer": "<fingerprint of a CA>", "profile": "server", "validDays": 90,
+    "profiles": { "shortlived": { "issuer": "<fingerprint of a CA>", "validDays": 7, "description": "A week." } },
+    "allowedNames": [ "lab.example.org", "10.0.0.0/8" ],
+    "challenges": [ "http-01", "dns-01" ],
+    "externalAccountRequired": true,
+    "termsOfService": null
+  }
+}
+```
+
+An order that names no profile is signed as the section itself says, one that
+names one - draft-ietf-acme-profiles, which Let's Encrypt speaks - as that
+profile says. `allowedNames` are what ACME signs for: a domain for itself and
+every name below it, an address for itself, an address with its prefix length
+for its network; none at all is every name whoever asks proves - as a public
+CA has it, and rarely what the PKI of a charging network wants. With
+`externalAccountRequired`, an account is opened only with a key of an external
+account binding (RFC 8555, section 7.3.4): one that somebody who may sign
+certificates made for it - on the ACME tab, at `POST /api/v1/pki/acme/eab` or
+with `pkiACME newKey` - and that opens one account, once; certbot takes it as
+`--eab-kid` and `--eab-hmac-key`. Every request is checked as Let's Encrypt
+checks it: a JWS of ES256, ES384, ES512, RS256 or PS256, a nonce handed out and
+not used before, the URL it was sent to, and the key of the account. An
+account changes its contacts and its key (`keyChange`) and deactivates itself;
+a certificate is revoked by its account, by an account that proved all of its
+names, or with its own key; and `renewalInfo` (ARI, RFC 9773) has a client
+renew in the last third of a certificate's life - at once, where it was
+revoked. The accounts, the keys of external account bindings and which
+certificate was signed for which account are kept in `pki/acme/accounts.json`;
+orders and nonces are kept in memory, and an order a restart forgot is placed
+again by its client. The CA signs without anybody there, so a CA whose key has
+a password signs nothing over ACME, and one of ISO 15118 none either: its
+certificates have no names to prove. RFC 8555 has ACME spoken over HTTPS - over
+the PKI's own, or that of a proxy in front that ends TLS; `"http01Port"` other
+than 80 is for a bench. Not here: `tls-alpn-01`, and an order's own
+`notBefore` and `notAfter`.
+
 **A server's or a client's certificate goes out with its key as PKCS#12**: the
 certificate, its private key and the sub-CAs above it - not the root - in one
 file, encrypted with a password of its own of 8 characters at least, with
@@ -266,7 +320,7 @@ of OpenChargingCloud does, signed in with an API key of the `registrar` role.
 
 | | |
 |---|---|
-| **PKI** (`/pki`) | every certificate of the PKI, filtered by a text in its common name and by its profile; the details of one - subject, chain, validity, key, fingerprint, its revocation, and of a CA its CRL and OCSP responder - with its PEM to copy or download, its chain, its CRL, the private key of a server's or client's certificate made here and the certificate with it as PKCS#12, the password of its key, the CRL of a CA signed anew, Revoke and Delete; and the forms: **New root CA**, **New sub-CA**, **New certificate** (server or client, with a key made here) and **Sign a CSR**; and the **Transparency log**: its address for a monitor, its id, its newest tree head and public key, and every entry, the newest first, a deleted certificate among them; **Revocation**: the address the PKI is reached at, the CRL and the responder of each CA, and every certificate revoked; and **EST**: what it signs without a label and at each label, whether it asks for a TLS client certificate, and whether it makes keys at `serverkeygen`. A root CA may be made as one of ISO 15118; below a CA of it, the forms make certificates of ISO 15118 - a sub-CA of the domain chosen, a SECC, contract, OEM provisioning or CPS certificate as its CA's domain has it - and ask neither for a key nor for other names, and EST below one says what it signs in place of server or client. The details of a certificate say whether it carries its timestamp, and the transparency log which entries are precertificates |
+| **PKI** (`/pki`) | every certificate of the PKI, filtered by a text in its common name and by its profile; the details of one - subject, chain, validity, key, fingerprint, its revocation, and of a CA its CRL and OCSP responder - with its PEM to copy or download, its chain, its CRL, the private key of a server's or client's certificate made here and the certificate with it as PKCS#12, the password of its key, the CRL of a CA signed anew, Revoke and Delete; and the forms: **New root CA**, **New sub-CA**, **New certificate** (server or client, with a key made here) and **Sign a CSR**; and the **Transparency log**: its address for a monitor, its id, its newest tree head and public key, and every entry, the newest first, a deleted certificate among them; **Revocation**: the address the PKI is reached at, the CRL and the responder of each CA, and every certificate revoked; **EST**: what it signs without a label and at each label, whether it asks for a TLS client certificate, and whether it makes keys at `serverkeygen`; and **ACME**: what it signs by default and as each profile, for which names, proven how and for whom, the keys of external account bindings - one made and said once, one taken away - and the accounts, with how many certificates each was signed, one deactivated. A root CA may be made as one of ISO 15118; below a CA of it, the forms make certificates of ISO 15118 - a sub-CA of the domain chosen, a SECC, contract, OEM provisioning or CPS certificate as its CA's domain has it - and ask neither for a key nor for other names, and EST below one says what it signs in place of server or client. The details of a certificate say whether it carries its timestamp, and the transparency log which entries are precertificates |
 | **Configuration** | what the PKI is running, how many certificates of each profile it keeps, and below it the **DNS client**, the **NTS client**, the **SSH server**, the **Trusted certificates** and **Identities** of the node itself |
 | **Logs** | the log as it happens |
 
@@ -291,6 +345,7 @@ The prompt, `pki:2360>`, has the commands every node has - `help`, `syncNTS`,
 | `pkiCRL` | the CRL of every CA: its number, how many it names, until when it is believed - or since when it is out of date - and where it is fetched |
 | `pkiSignCRL <CA> [<days>]` | sign the CRL of a CA anew |
 | `pkiEST` | what EST signs without a label and at each label, below which CA and for how long |
+| `pkiACME [accounts \| newKey [<description>]]` | what ACME signs by default and as each profile, for which names and for whom; its accounts; or a new key of an external account binding, said once, with the line certbot registers with |
 
 A `<certificate>` is the beginning of its fingerprint, four characters at
 least, as `pki` writes it, or its whole common name; where more than one
@@ -322,6 +377,9 @@ What every node answers is WWCP_Node's. The PKI adds, below `/api/v1/pki`:
 | `GET ca/{id}.crt` | the certificate of a CA, as DER - to anybody |
 | `POST ocsp`, `GET ocsp/{request}` | the OCSP responder of RFC 6960 - to anybody |
 | `GET est`, `PUT est` | what EST signs: `{ issuer, profile, validDays, v2g, labels, tlsClientCertificates, serverKeyGeneration }`, each label `{ issuer, profile, validDays, v2g }` |
+| `GET acme`, `PUT acme` | what ACME signs: `{ issuer, profile, validDays, profiles, externalAccountRequired, allowedNames, challenges, http01Port, termsOfService }`, each profile `{ issuer, profile, validDays, description }` |
+| `GET acme/accounts`, `DELETE acme/accounts/{id}` | the accounts of ACME, and one deactivated for good |
+| `GET acme/eab`, `POST acme/eab`, `DELETE acme/eab/{kid}` | the keys of external account bindings, without their MAC keys; a new one, `{ description }`, answered with its `kid` and `hmacKey` this once; one taken away |
 | `DELETE certificates/{id}?withIssued=true` | delete it, with everything it signed |
 | `POST rootCAs`, `POST subCAs` | `{ subject, keyAlgorithm, validDays, pathLength, keyPassword, v2g }`, a sub-CA with its `issuer` and `issuerKeyPassword` |
 | `POST certificates` | `{ issuer, issuerKeyPassword, profile, subject, keyAlgorithm, validDays, subjectAlternativeNames, keyPassword, v2g }` |
@@ -331,7 +389,11 @@ What every node answers is WWCP_Node's. The PKI adds, below `/api/v1/pki`:
 | `GET transparency/ct/v1/...` | what RFC 6962, section 4, has a log answer: `get-sth`, `get-sth-consistency`, `get-proof-by-hash`, `get-entries`, `get-roots` and `get-entry-and-proof` |
 
 And EST itself at `/.well-known/est[/<label>]/`: `GET cacerts`, `POST
-simpleenroll`, `POST simplereenroll`, `POST serverkeygen` and `GET csrattrs`.
+simpleenroll`, `POST simplereenroll`, `POST serverkeygen` and `GET csrattrs`;
+and ACME at `/acme/`: `GET directory`, `HEAD`/`GET new-nonce`, `POST
+new-account`, `acct/{id}`, `acct/{id}/orders`, `key-change`, `new-order`,
+`order/{id}`, `authz/{id}`, `chall/{id}`, `finalize/{id}`, `cert/{id}` and
+`revoke-cert`, and `GET renewal-info/{id}`.
 
 `v2g` makes a certificate of ISO 15118, of the domain it names - `V2G`, `CPO`,
 `MO`, `OEM` or `CPS` - with ECC P-256 where no key is asked for; a certificate
